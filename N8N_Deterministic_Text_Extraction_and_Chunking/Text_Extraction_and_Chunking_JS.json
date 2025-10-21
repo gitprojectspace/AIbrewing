@@ -1,0 +1,284 @@
+{
+  "name": "Text_Extraction_and_Chunking_JS",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "text",
+        "options": {}
+      },
+      "id": "2a6d9028-b617-426c-9dcd-e04a2329b097",
+      "name": "Extract Document Text",
+      "type": "n8n-nodes-base.extractFromFile",
+      "typeVersion": 1,
+      "position": [
+        -112,
+        128
+      ],
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.mistral.ai/v1/files",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "multipart-form-data",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "purpose",
+              "value": "ocr"
+            },
+            {
+              "parameterType": "formBinaryData",
+              "name": "file",
+              "inputDataFieldName": "data"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -112,
+        -48
+      ],
+      "id": "6c6b1fb2-3047-473a-b482-4a47d1d8f3b6",
+      "name": "HTTP Request1",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "eFmKeWoOmor2Efvj",
+          "name": "Mistral OCR"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "=https://api.mistral.ai/v1/files/{{ $json.id }}/url",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "expiry",
+              "value": "24"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        80,
+        -48
+      ],
+      "id": "29c3caa6-663a-43f2-a7a4-3932471e2871",
+      "name": "Get Signed URL",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "eFmKeWoOmor2Efvj",
+          "name": "Mistral OCR"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.mistral.ai/v1/ocr",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"model\": \"mistral-ocr-latest\",\n  \"document\": {\n    \"type\": \"document_url\",\n    \"document_url\": \"{{ $json.url }}\"\n  },\n  \"include_image_base64\": true\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        272,
+        -48
+      ],
+      "id": "f7a38c1f-b993-4721-8f9b-f641215185bb",
+      "name": "Get OCR Results",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "eFmKeWoOmor2Efvj",
+          "name": "Mistral OCR"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Code for regular Code node - will make HTTP calls to Groq API directly\nconst documentContent = $input.item.json?.data || $input.item.json?.text;\nconst maxChunkSize = 1200;  // Max characters per chunk\nconst minChunkSize = 400;   // Minimum chunk size for merging\n\nif (!documentContent) {\n    throw new Error('No document found in input');\n}\n\n// Get your Groq API key from environment or credentials\nconst groqApiKey = $env['Grog Proj5 API'] || 'YOUR_GROQ_API_KEY_HERE';\nconst groqModel = 'llama-3.1-8b-instant';\n\nconsole.log('=== Starting intelligent chunking ===');\nconsole.log('Document length:', documentContent.length);\n\n// ========================\n// Helper functions\n// ========================\n\n// Clean text: normalize spaces but preserve line breaks\nfunction cleanText(text) {\n    return text.replace(/\\r\\n/g, \"\\n\").replace(/ +/g, ' ').trim();\n}\n\n// Detect if text contains bullets or numbered lists\nfunction containsBulletList(text) {\n    const bulletPatterns = [\n        /^\\s*\\d+\\.\\s+/m,           // Numbered list (1., 2., 3.)\n        /^\\s*[•\\-\\*]\\s+/m,         // Bullet points\n        /^\\s*[a-z]\\.\\s+/m,         // Letter list (a., b.)\n        /^\\s*[A-Z]\\.\\s+/m          // Capital letter list (A., B.)\n    ];\n    return bulletPatterns.some(pattern => pattern.test(text));\n}\n\n// Find last complete bullet point before maxPos\nfunction findLastCompleteBulletPoint(text, maxPos) {\n    const lines = text.split(/\\n/);\n    let position = 0;\n    let lastBulletEnd = -1;\n\n    for (let i = 0; i < lines.length; i++) {\n        const line = lines[i];\n        const lineEnd = position + line.length + 1; // +1 for \\n\n\n        const isBullet = /^\\s*(\\d+\\.|[•\\-\\*]|[a-zA-Z]\\.)\\s+/.test(line);\n        const nextLine = i + 1 < lines.length ? lines[i + 1] : '';\n        const nextIsBullet = /^\\s*(\\d+\\.|[•\\-\\*]|[a-zA-Z]\\.)\\s+/.test(nextLine);\n        const nextIsEmpty = nextLine.trim() === '';\n\n        // End of a bullet detected\n        if (isBullet && (nextIsBullet || nextIsEmpty || i === lines.length - 1)) {\n            if (lineEnd <= maxPos) lastBulletEnd = lineEnd;\n        }\n\n        // Paragraph break (only if next non-empty line is not bullet)\n        if (!isBullet && nextIsEmpty && !nextIsBullet && lineEnd <= maxPos) {\n            lastBulletEnd = lineEnd;\n        }\n\n        position = lineEnd;\n        if (position >= maxPos) break;\n    }\n\n    return lastBulletEnd;\n}\n\n// Call Groq API for embedding or analysis (if needed)\nasync function callGroqAPI(prompt) {\n    const url = 'https://api.groq.com/openai/v1/chat/completions';\n    \n    const response = await $http.request({\n        method: 'POST',\n        url: url,\n        headers: {\n            'Authorization': `Bearer ${groqApiKey}`,\n            'Content-Type': 'application/json'\n        },\n        body: {\n            model: groqModel,\n            messages: [\n                { role: 'user', content: prompt }\n            ],\n            max_tokens: 50,\n            temperature: 0.3\n        }\n    });\n    \n    return response.choices[0].message.content;\n}\n\n// ========================\n// Deterministic chunking\n// ========================\nfunction chunkTextDeterministic(text, maxChunkSize = 1000) {\n    text = cleanText(text);\n\n    // Split by sentences and bullet points, keeping delimiters\n    const units = text.match(/[^.!?•●▪️\\n]+[.!?•●▪️\\n]*/g) || [text];\n\n    const chunks = [];\n    let currentChunk = \"\";\n\n    for (const unit of units) {\n        const trimmed = unit.trim();\n        if (!trimmed) continue;\n\n        // Adding unit exceeds max chunk size?\n        if ((currentChunk + \" \" + trimmed).length > maxChunkSize) {\n            if (trimmed.length > maxChunkSize) {\n                // Extremely long sentence: split by words safely\n                const words = trimmed.split(\" \");\n                let segment = \"\";\n                for (const word of words) {\n                    if ((segment + \" \" + word).length > maxChunkSize) {\n                        chunks.push(segment.trim());\n                        segment = word;\n                    } else {\n                        segment += (segment ? \" \" : \"\") + word;\n                    }\n                }\n                if (segment.trim()) chunks.push(segment.trim());\n                currentChunk = \"\";\n            } else {\n                // Push current chunk and start new\n                if (currentChunk.trim()) chunks.push(currentChunk.trim());\n                currentChunk = trimmed;\n            }\n        } else {\n            currentChunk += (currentChunk ? \" \" : \"\") + trimmed;\n        }\n    }\n\n    if (currentChunk.trim()) chunks.push(currentChunk.trim());\n\n    return chunks.map((c, i) => ({\n        chunk: i + 1,\n        content: c,\n        chunk_size: c.length,\n    }));\n}\n\n// ========================\n// Main processing\n// ========================\nlet chunks = chunkTextDeterministic(documentContent, maxChunkSize);\nconsole.log('Initial chunks created:', chunks.length);\n\n// ========================\n// Merge small chunks\n// ========================\nlet i = 0;\nwhile (i < chunks.length) {\n    if (chunks[i].chunk_size < minChunkSize) {\n        if (i + 1 < chunks.length &&\n            chunks[i].chunk_size + chunks[i + 1].chunk_size <= maxChunkSize) {\n            chunks[i].content += ' ' + chunks[i + 1].content;\n            chunks[i].chunk_size = chunks[i].content.length;\n            chunks.splice(i + 1, 1);\n            console.log('Merged with next chunk');\n        } else if (i > 0 &&\n                   chunks[i - 1].chunk_size + chunks[i].chunk_size <= maxChunkSize) {\n            chunks[i - 1].content += ' ' + chunks[i].content;\n            chunks[i - 1].chunk_size = chunks[i - 1].content.length;\n            chunks.splice(i, 1);\n            console.log('Merged with previous chunk');\n        } else {\n            i++;\n        }\n    } else {\n        i++;\n    }\n}\n\n// Renumber chunks after merging\nchunks.forEach((chunk, index) => chunk.chunk = index + 1);\n\nconsole.log('Final chunks:', chunks.length);\n\n// ========================\n// Return chunks to N8N\n// ========================\nreturn chunks.map(chunk => ({ json: chunk }));\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        80,
+        128
+      ],
+      "id": "9123e4ad-8632-4369-96ac-2d4b6998ebd5",
+      "name": "Code node x chunking"
+    },
+    {
+      "parameters": {
+        "jsCode": "const items = [];\nlet chunkNumber = 1;\n\nfor (const input of $input.all()) {\n  const pages = input.json.pages || [];\n  for (const page of pages) {\n    if (page.markdown) {\n      const content = page.markdown.trim();\n      items.push({\n        json: {\n          content,\n          chunk: chunkNumber++,\n          chunk_size: content.length,\n          metadata: {\n            source: \"pdf\",\n            page: page.index\n          }\n        }\n      });\n    }\n  }\n}\n\nreturn items;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        -48
+      ],
+      "id": "11815201-5e9a-4b29-8556-c8b630e09e58",
+      "name": "PDF chunks formatter"
+    },
+    {
+      "parameters": {
+        "content": "## Code node for text chunking\n\n1. Splits the text without breaking sentences and bullets.\n2. Adds them greedily while staying under `maxChunkSize`.\n3. **Never splits words** (strictly enforced by regex).\n4. If adding a sentence/bullet exceeds the limit, move the *entire* sentence/bullet to the next chunk.",
+        "height": 192,
+        "width": 384,
+        "color": 7
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        144,
+        304
+      ],
+      "id": "f37db292-0258-494f-a5eb-7fe0cd15bff9",
+      "name": "Sticky Note4"
+    }
+  ],
+  "pinData": {
+    "HTTP Request1": [
+      {
+        "json": {
+          "id": "df0014cd-a1d7-4800-9387-277799512cff",
+          "object": "file",
+          "bytes": 58712,
+          "created_at": 1759753473,
+          "filename": "Ensure-Your-Resume-Is-Read-ATS.docx.pdf",
+          "purpose": "ocr",
+          "sample_type": "ocr_input",
+          "num_lines": 0,
+          "mimetype": "application/pdf",
+          "source": "upload",
+          "signature": "02a9196a9f0a6e5d0f264dd24a713cd2"
+        }
+      }
+    ],
+    "Get Signed URL": [
+      {
+        "json": {
+          "url": "https://mistralaifilesapiprodswe.blob.core.windows.net/fine-tune/2a17d8c6-5326-41bb-8728-be2947a2c19a/91b4358c-4b3e-44dc-add7-0bb234db8c5d/df0014cda1d748009387277799512cff.pdf?se=2025-10-10T18%3A25%3A43Z&sp=r&sv=2025-01-05&sr=b&sig=yljD0HRq3IxaKX/fx8ahuVAaRmnSh6Q9RKVI7J4IK%2Bs%3D"
+        }
+      }
+    ],
+    "Get OCR Results": [
+      {
+        "json": {
+          "pages": [
+            {
+              "index": 0,
+              "markdown": "Office of Career Services $\\cdot$ Student Services Building, Suite 3050 $\\cdot$ 1200 W Harrison Street $\\cdot$ 312.996.2300 $\\cdot$ ocs@uic.edu $\\cdot$ careers.uic.edu\n\nOptimizing Resumes for Applicant Tracking Systems (ATS)\nApplicant tracking systems are the computer systems used by organizations to manage the flood of applications they receive. The ATS will read your resume, and then rank and score your qualifications vs. the job descriptions. Only those applicants who receive high scores will get a call for an interview. If you follow these formatting tips you will greatly increase the likelihood that your resume will rise to the top of the list.\n\nTop 5 Tips:\n\n1. Do not use templates! Use a standard Word document, and save in .doc format: File/Save As/Word 97-2003. Not all ATS systems can read .docx, PDF, RTF, and JPG formats.\n2. Use simple formatting. Do not use headers (including for contact information), footers, templates, borders, lines, symbols (bullet points are fine) or shading.\n3. Customize each resume for the specific position being sought using language from the job description. \"One-size-fits-all\" does not work with applicant tracking systems. Incorporate relevant, targeted keywords and phrases for the position being sought. Be specific -- i.e., \"Adobe Photoshop\" instead of \"image-editing software\")\n4. Use keywords and phrases in context. Incorporate them into descriptive achievement-oriented bullet points; do not just include them as a list of skills or competencies\n5. Edit carefully: The ATS will not recognize misspelled words. And, if your resume survives the ATS screen, it will next be reviewed by human beings so it must be Eror error-free\n\nMake sure your optimized resume also:\n$\\times$ Does not include any special characters or accented words\n$\\times$ Includes no punctuation in your name, such as ( ), / -\n$\\times$ Is in a single column format (no tables, multiple columns, or text boxes)\n$\\times$ Uses simply formatted text of a reasonable size (11 point font or above)\n$\\times$ Contains only your name on the top line, with no degrees or certifications after it",
+              "images": [],
+              "dimensions": {
+                "dpi": 200,
+                "height": 2200,
+                "width": 1700
+              }
+            },
+            {
+              "index": 1,
+              "markdown": "$\\times$ Includes standard fonts (Arial, Georgia, Tahoma, Calibri, and Verdana are safe choices)\n$\\times$ Includes months when listing dates (e.g., 06/2010 - 08/2012). Dates should be on the right\n$\\times$ Does not contain complex formatting (condensed or expanded text) -- that is, don't use extra spaces between letters, because the ATS can't \"read\" it\n$\\times$ Contains proper capitalization and punctuation. Both of these can affect how information is parsed and assigned within the ATS database\n$\\times$ Uses the full, spelled-out version terms in addition to abbreviations and acronyms [i.e., Certified Public Accountant (CPA)]\n\nOffice of Career Services $\\cdot$ Student Services Building, Suite 3050 $\\cdot$ 1200 W Harrison Street $\\cdot$ 312.996.2300 $\\cdot$ ocs@uic.edu $\\cdot$ careers.uic.edu\n\n- Do remember that even if you have a personal connection through your network, your resume will typically need to be submitted to the company's ATS.\n- When applying for a specific position, do use that exact job title on the resume.\n- When listing dates for employment or education, do list dates to the right of the information.\n- If you wish to include a context statement describing the organization you worked with, do include that statement after the organization name, your title, and employment dates.\n- Do consider including section headers in ALL CAPS to make it easy for the applicant tracking system to categorize the information.\n- If you are working towards a certification that is a requirement for the position, do include it on the resume -- but make sure you include a phrase such as \"Pursuing (name of credential)\"\n- Do check your email after applying for a position online. Some applicant tracking systems acknowledge submissions, but these automated responses may be diverted to your spam folder.\n- If given the choice, do upload your resume rather than cutting pasting sections into text boxes. When it is eventually forwarded to a human, it will look much more attractive.",
+              "images": [],
+              "dimensions": {
+                "dpi": 200,
+                "height": 2200,
+                "width": 1700
+              }
+            },
+            {
+              "index": 2,
+              "markdown": "Do be mindful of special characters and accents you use on your resume. Some words and phrases can be misinterpreted by an applicant tracking system -- for example, accented words. The word \"résumé\" itself is not ATS-friendly. The ATS does not recognize the accented letters. Instead, it reads it as \"r?sum?.\"\n\nDo feel free to make your resume as long as you want to. The ATS won't penalize you for length. However, since it may also be read by a person, keeping it to two pages is smart. However, if you have a 2-page resume, put your name and Page 2 in a header so the ATS can't \"see\" it\n\nDon't list your credentials (MBA, CPA, etc.) next to your name. Include that information on a separate line\n\nDon't include skills you don't possess on the resume as an attempt to \"trick\" the applicant tracking system into selecting you. Anything on your resume needs to be substantiated in an interview, or increasingly in a skills-based test before you interview.\n\nDon't mix different fonts and sizes in your resume\nDon't feel the need to create a completely stripped down document. In the old days we would save documents in .txt format with absolutely no formatting before submitting online. Because your resume will eventually be seen by a human being, keeping some simple formatting such as bold, caps and bullet points will help to keep your resume attractive.",
+              "images": [],
+              "dimensions": {
+                "dpi": 200,
+                "height": 2200,
+                "width": 1700
+              }
+            }
+          ],
+          "model": "mistral-ocr-2505-completion",
+          "document_annotation": null,
+          "usage_info": {
+            "pages_processed": 3,
+            "doc_size_bytes": 58712
+          }
+        }
+      }
+    ]
+  },
+  "connections": {
+    "Extract Document Text": {
+      "main": [
+        [
+          {
+            "node": "Code node x chunking",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "Get Signed URL",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get Signed URL": {
+      "main": [
+        [
+          {
+            "node": "Get OCR Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get OCR Results": {
+      "main": [
+        [
+          {
+            "node": "PDF chunks formatter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "76e24743-fc82-4a23-a8d4-39fde82feaa6",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "a5020250ea4c8ecd30bf56fe706633879757cf723eb75ffc2be6f41dad4c0210"
+  },
+  "id": "lWKW1YSc2dyyW4dc",
+  "tags": []
+}
